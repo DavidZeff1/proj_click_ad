@@ -1,0 +1,111 @@
+================================================================================
+CRITEO CTR PREDICTION — PROJECT OVERVIEW
+================================================================================
+
+PROJECT GOAL
+------------
+Build a binary classifier that predicts whether an ad impression will be clicked
+(target = 1) or not (target = 0), using the Criteo click-through-rate (CTR)
+dataset. The end-to-end work lives in `eda_updated.ipynb`.
+
+DATASET
+-------
+File:         Criteo_1M_with_nans.csv
+Rows:         1,000,000
+Columns:      40 total
+  - target:   binary label (1 = click, 0 = no click)
+  - intCol_0 ... intCol_12   (13 numeric features)
+  - catCol_0 ... catCol_25   (26 hashed categorical features)
+Positive rate: ~25.5% (moderately imbalanced)
+Notes:
+  - All feature names and categorical values are hashed/anonymized — no domain
+    semantics are available (a value like `e5ba7672` could be anything).
+  - Many columns have heavy missingness; some numeric columns reach extreme
+    max values (e.g. intCol_4 hits 2.5M) requiring outlier handling.
+  - Categorical cardinalities range from ~10 to >100,000 unique values, so
+    one-hot encoding is infeasible on the high-cardinality columns.
+
+GUIDING PHILOSOPHY
+------------------
+Because the features are anonymized, we have no intuition about which
+preprocessing choices "should" work. The project therefore tests multiple
+alternatives
+
+
+NOTEBOOK STRUCTURE
+------------------
+1. EDA — shape, types, target balance, missingness, numeric distributions,
+   categorical cardinality, and correlation of each numeric with the target.
+2. Cleansing + Encoding + Scaling — a single sklearn `ColumnTransformer`/
+   `Pipeline` that does:
+     - numerics:    median imputation -> StandardScaler
+     - categoricals: constant "missing" imputation -> OrdinalEncoder
+   Outliers are pre-clipped at the 1st/99th percentile.
+3. Feature Importance — a quick RandomForest (depth-capped, 100k sample) to
+   sanity-check that the model is picking up signal from a reasonable mix of
+   features.
+4. Stratified Train / Val / Test split (60 / 20 / 20, stratified on y).
+5. Model comparison on val — NB, KNN (50k sample), GBM. Reports accuracy,
+   precision, recall, F1, ROC-AUC, and confusion matrix. Winner picked on
+   ROC-AUC (threshold-independent ranking quality).
+6. Final evaluation on the held-out test set — refit GBM on train+val
+   combined, predict on test once, report all metrics.
+7. Class imbalance experiments — compares no-resampling baseline against
+   ROS, RUS, SMOTE, and SMOTETomek on a 100k-row training subsample. Samplers
+   run inside `imblearn.Pipeline.fit()` only, so val/test are scored on the
+   real class distribution.
+
+Sections 8–14 (threshold tuning, improved preprocessor, encoder/scaler/
+imputation/outlier shootouts, GBM hyperparameter sweep) are scoped in the
+intro and are planned next steps.
+
+KEY RESULTS
+-----------
+Model comparison on val (cutoff = 0.25 for hard predictions):
+
+  Model   Accuracy   Precision   Recall   F1       ROC-AUC
+  GBM     0.6962     0.4382      0.6802   0.5330   0.7594   <- winner
+  NB      0.6977     0.4151      0.4536   0.4335   0.6727
+  KNN     0.5158     0.2912      0.6272   0.3978   0.5790
+
+Final GBM on test (cutoff = 0.50):
+  Accuracy : 0.7754
+  Precision: 0.6640
+  Recall   : 0.2410   <- low recall at 0.5 cutoff
+  F1       : 0.3536
+  ROC-AUC  : 0.7602
+
+Class-imbalance shootout on val (sorted by F1):
+  Technique           F1       Recall    Precision   ROC-AUC
+  RUS                 0.5174   0.6374    0.4354      0.7428
+  ROS                 0.5126   0.5998    0.4476      0.7413
+  SMOTE               0.3613   0.2557    0.6153      0.7454
+  SMOTETomek          0.3394   0.2327    0.6265      0.7445
+  None (baseline)     0.3188   0.2117    0.6456      0.7462
+
+Takeaways:
+  - GBM is the strongest of the four model families tried.
+  - ROC-AUC is essentially flat (~0.74-0.76) across resampling methods —
+    resampling is reshuffling the precision/recall trade-off, not adding
+    information.
+  - The biggest lever for recall is the decision threshold, not the model
+    family (covered in the planned section 8).
+
+PIPELINE & ANTI-LEAKAGE
+-----------------------
+All preprocessing is encapsulated inside an sklearn (or imblearn) `Pipeline`
+together with the classifier. This means:
+  - The preprocessor is fit only on training data within each split.
+  - Validation and test predictions use parameters learned from training only.
+  - Samplers (ROS/RUS/SMOTE/SMOTETomek) fire only inside `.fit()`, so val/test
+    are always evaluated against the real, unbalanced class distribution.
+
+
+NEXT STEPS (planned in the notebook intro, not yet implemented)
+---------------------------------------------------------------
+  - Threshold tuning sweep (0.10 -> 0.90) to pick a cutoff that balances
+    precision and recall on val.
+  - Improved preprocessor: TargetEncoder for categoricals, missing-indicator
+    features, larger GBM.
+  - Shootouts on each preprocessing decision (encoder, scaler, imputer,
+    outlier handling) and a GBM hyperparameter sweep.
